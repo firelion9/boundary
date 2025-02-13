@@ -51,22 +51,23 @@ static llvm::cl::list<std::string> LoadProfilesFrom("load-function-profiles", ll
 static llvm::cl::list<std::string> IOPasses("boundary-pass", llvm::cl::ZeroOrMore,
                                             llvm::cl::desc("Algorithm for call graph analysis (bfs or dfs)"));
 
-static llvm::cl::opt<AnalysisDirection::AnalysisDirection> BoundaryAnalysisDirection("boundary-analysis-direction", llvm::cl::init(
-                                                                                       AnalysisDirection::COMPLEXITY),
-                                                                               llvm::cl::values(
-                                                                                       clEnumValN(
-                                                                                               AnalysisDirection::BFS,
-                                                                                               "bfs", "BFS"),
-                                                                                       clEnumValN(
-                                                                                               AnalysisDirection::DFS,
-                                                                                               "dfs", "DFS"),
-                                                                                       clEnumValN(
-                                                                                               AnalysisDirection::COMPLEXITY,
-                                                                                               "complexity",
-                                                                                               "extended DFS")
-                                                                               ),
-                                                                               llvm::cl::desc(
-                                                                                       "Algorithm for call graph analysis")
+static llvm::cl::opt<AnalysisDirection::AnalysisDirection> BoundaryAnalysisDirection("boundary-analysis-direction",
+                                                                                     llvm::cl::init(
+                                                                                             AnalysisDirection::COMPLEXITY),
+                                                                                     llvm::cl::values(
+                                                                                             clEnumValN(
+                                                                                                     AnalysisDirection::BFS,
+                                                                                                     "bfs", "BFS"),
+                                                                                             clEnumValN(
+                                                                                                     AnalysisDirection::DFS,
+                                                                                                     "dfs", "DFS"),
+                                                                                             clEnumValN(
+                                                                                                     AnalysisDirection::COMPLEXITY,
+                                                                                                     "complexity",
+                                                                                                     "extended DFS")
+                                                                                     ),
+                                                                                     llvm::cl::desc(
+                                                                                             "Algorithm for call graph analysis")
 );
 
 static llvm::cl::opt<std::string> ModeDumpDir("mode-dump-dir", llvm::cl::init("function_modes"),
@@ -180,12 +181,104 @@ static std::set<llvm::Function *> bfsBinary(llvm::Module &Module, const std::map
     return bfsBinary(Module, FuncMapping, InverseCallGraph, InitialRoots);
 }
 
-FunctionComplexity operator*(unsigned int scl, const FunctionComplexity &c) {
+constexpr FunctionComplexity::FunctionComplexity() : Total(0), Io(0), Memory(0) {}
+
+constexpr FunctionComplexity::FunctionComplexity(unsigned int Total, unsigned int Io)
+        : Total(Total), Io(Io), Memory(0) {}
+
+constexpr FunctionComplexity::FunctionComplexity(long double Total, long double Io, long double Memory)
+        : Total(Total), Io(Io), Memory(Memory) {}
+
+constexpr FunctionComplexity FunctionComplexity::operator+(const FunctionComplexity &other) const {
+    return {Total + other.Total, Io + other.Io, Memory + other.Memory};
+}
+
+constexpr FunctionComplexity &FunctionComplexity::operator+=(const FunctionComplexity &other) {
+    Total += other.Total;
+    Io += other.Io;
+    Memory += other.Memory;
+    return *this;
+}
+
+constexpr FunctionComplexity FunctionComplexity::IoAsComplexity(unsigned int IoCalls) {
+    return FunctionComplexity(IoCalls > 0 ? IoCalls : 1, IoCalls);
+}
+
+constexpr FunctionComplexity FunctionComplexity::IoAsComplexity(long double IoCalls) {
+    return FunctionComplexity(IoCalls > 0 ? IoCalls : 1, IoCalls);
+}
+
+constexpr FunctionComplexity operator*(unsigned int scl, const FunctionComplexity &c) {
     return {
             scl * c.Total,
             scl * c.Io,
             scl * c.Memory,
     };
+}
+
+static constexpr FunctionComplexity PROC_OP = FunctionComplexity(1.0, 0.0, 0.0);
+static constexpr FunctionComplexity MEM_OP = FunctionComplexity(1.0, 0.0, 1.0);
+static constexpr FunctionComplexity IO_OP = FunctionComplexity(1.0, 1.0, 0.0);
+
+static constexpr unsigned MUL_COST = 6;
+static constexpr unsigned DIV_COST = 20;
+static constexpr unsigned BRANCH_COST = 5;
+
+static FunctionComplexity nonCallInstructionCost(const llvm::Instruction &Ins) {
+    if (Ins.mayReadOrWriteMemory()) return 1 * MEM_OP;
+
+    if (auto BinOp = llvm::dyn_cast<llvm::BinaryOperator>(&Ins); nullptr != BinOp) {
+        switch (BinOp->getOpcode()) {
+            case llvm::Instruction::FAdd:
+            case llvm::Instruction::Add:
+            case llvm::Instruction::FSub:
+            case llvm::Instruction::Sub:
+            case llvm::Instruction::And:
+            case llvm::Instruction::Or:
+            case llvm::Instruction::Xor:
+            case llvm::Instruction::Shl:
+            case llvm::Instruction::LShr:
+            case llvm::Instruction::AShr:
+                return 1 * PROC_OP;
+
+            case llvm::Instruction::Mul:
+            case llvm::Instruction::FMul:
+                return MUL_COST * PROC_OP;
+
+            case llvm::Instruction::UDiv:
+            case llvm::Instruction::SDiv:
+            case llvm::Instruction::FDiv:
+            case llvm::Instruction::URem:
+            case llvm::Instruction::SRem:
+            case llvm::Instruction::FRem:
+                return DIV_COST * PROC_OP;
+
+            default:
+                throw std::runtime_error("unknown BinOp opcode " + std::to_string(BinOp->getOpcode()));
+        }
+    } else if (auto CastInst = llvm::dyn_cast<llvm::CastInst>(&Ins); nullptr != CastInst) {
+        return 1 * PROC_OP;
+    } else if (auto CmpInst = llvm::dyn_cast<llvm::CmpInst>(&Ins); nullptr != CmpInst) {
+        return 1 * PROC_OP;
+    } else if (auto UnaryOp = llvm::dyn_cast<llvm::UnaryOperator>(&Ins); nullptr != UnaryOp) {
+        switch (UnaryOp->getOpcode()) {
+            case llvm::Instruction::FNeg:
+                return 1 * PROC_OP;
+
+            default:
+                throw std::runtime_error("unknown UnaryOp opcode " + std::to_string(UnaryOp->getOpcode()));
+        }
+    } else if (auto RetIns = llvm::dyn_cast<llvm::ReturnInst>(&Ins); nullptr != RetIns) {
+        return 1 * PROC_OP;
+    } else if (auto AllocaInst = llvm::dyn_cast<llvm::AllocaInst>(&Ins); nullptr != AllocaInst) {
+        return 1 * MEM_OP;
+    } else if (auto BranchInst = llvm::dyn_cast<llvm::BranchInst>(&Ins); nullptr != BranchInst) {
+        return BRANCH_COST * PROC_OP;
+    } else if (auto GetElementPtrInst = llvm::dyn_cast<llvm::GetElementPtrInst>(&Ins); nullptr != GetElementPtrInst) {
+        return 1 * MEM_OP;
+    } else {
+        throw std::runtime_error(std::string("unknown instruction ") + Ins.getOpcodeName());
+    }
 }
 
 static FunctionComplexity
@@ -224,11 +317,8 @@ complexityOf(llvm::Function &Func, std::vector<int> &State, std::vector<Function
                     }
                     Res += Freq *
                            complexityOf(*DirectInvoc, State, ResVec, FuncMapping, IoCalls, MemoryCalls, PSI, FAM);
-                } else if (Ins.mayReadOrWriteMemory()) {
-                    Res.Memory += Freq;
-                    Res.Total += Freq;
                 } else {
-                    Res.Total += Freq;
+                    Res += Freq * nonCallInstructionCost(Ins);
                 }
             }
         }
@@ -371,7 +461,7 @@ BoundaryAnalysis::Result BoundaryAnalysis::runOnModule(llvm::Module &Module, llv
 
 llvm::PreservedAnalyses
 BoundaryAnalysisPrinter::run(llvm::Module &M,
-                       llvm::ModuleAnalysisManager &MAM) {
+                             llvm::ModuleAnalysisManager &MAM) {
 
     auto IOCalls = MAM.getResult<BoundaryAnalysis>(M);
 
@@ -454,7 +544,9 @@ llvm::PassPluginLibraryInfo getBoundaryPluginInfo() {
                             std::set<std::string> ExternalMemoryFunctionNames;
                             LoadFunctionProfiles(ExternalIoFunctionNames, ExternalMemoryFunctionNames);
                             MAM.registerPass(
-                                    [&] { return BoundaryAnalysis(ExternalIoFunctionNames, ExternalMemoryFunctionNames); });
+                                    [&] {
+                                        return BoundaryAnalysis(ExternalIoFunctionNames, ExternalMemoryFunctionNames);
+                                    });
                         });
             }};
 };
@@ -521,7 +613,7 @@ llvm::PreservedAnalyses BoundaryInstrument::run(llvm::Module &M, llvm::ModuleAna
     if (!EnterIoMarker && !ExitIoMarker && !EnterMemoryMarker && !ExitIoMarker) {
         return llvm::PreservedAnalyses::all();
     }
-    
+
     std::set<std::string> Intrinsics;
     if (!EnterIoIntrinsic.empty()) Intrinsics.insert(EnterIoIntrinsic);
     if (!ExitIoIntrinsic.empty()) Intrinsics.insert(ExitIoIntrinsic);
@@ -567,31 +659,3 @@ llvm::PreservedAnalyses BoundaryAnalysisDumper::run(llvm::Module &M, llvm::Modul
 void BoundaryAnalysisDumper::getAnalysisUsage(llvm::AnalysisUsage &AU) const {
     AU.addRequiredID(BoundaryAnalysis::ID());
 }
-
-FunctionComplexity::FunctionComplexity() : Total(0), Io(0), Memory(0) {}
-
-
-FunctionComplexity::FunctionComplexity(unsigned int Total, unsigned int Io) : Total(Total), Io(Io) {}
-
-FunctionComplexity::FunctionComplexity(long double Total, long double Io, long double Memory) : Total(Total), Io(Io),
-                                                                                                Memory(Memory) {}
-
-FunctionComplexity FunctionComplexity::operator+(const FunctionComplexity &other) const {
-    return {Total + other.Total, Io + other.Io, Memory + other.Memory};
-}
-
-FunctionComplexity &FunctionComplexity::operator+=(const FunctionComplexity &other) {
-    Total += other.Total;
-    Io += other.Io;
-    Memory += other.Memory;
-    return *this;
-}
-
-FunctionComplexity FunctionComplexity::IoAsComplexity(unsigned int IoCalls) {
-    return FunctionComplexity(IoCalls > 0 ? IoCalls : 1, IoCalls);
-}
-
-FunctionComplexity FunctionComplexity::IoAsComplexity(long double IoCalls) {
-    return FunctionComplexity(IoCalls > 0 ? IoCalls : 1, IoCalls);
-}
-

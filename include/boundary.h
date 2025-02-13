@@ -15,21 +15,21 @@ struct FunctionComplexity {
     long double Io;
     long double Memory;
 
-    FunctionComplexity();
+    constexpr FunctionComplexity();
 
-    FunctionComplexity(const FunctionComplexity &) = default;
+    constexpr FunctionComplexity(const FunctionComplexity &) = default;
 
-    FunctionComplexity(unsigned Total, unsigned Io);
+    constexpr FunctionComplexity(unsigned Total, unsigned Io);
 
-    FunctionComplexity(long double Total, long double Io, long double Memory = 0.0);
+    constexpr FunctionComplexity(long double Total, long double Io, long double Memory = 0.0);
 
-    FunctionComplexity operator+(const FunctionComplexity &other) const;
+    constexpr FunctionComplexity operator+(const FunctionComplexity &other) const;
 
-    FunctionComplexity &operator+=(const FunctionComplexity &other);
+    constexpr FunctionComplexity &operator+=(const FunctionComplexity &other);
 
-    static FunctionComplexity IoAsComplexity(unsigned IoCalls);
+    static constexpr FunctionComplexity IoAsComplexity(unsigned IoCalls);
 
-    static FunctionComplexity IoAsComplexity(long double IoCalls);
+    static constexpr FunctionComplexity IoAsComplexity(long double IoCalls);
 };
 
 using ResultIoComplexity = llvm::MapVector<const llvm::Function *, FunctionComplexity>;
