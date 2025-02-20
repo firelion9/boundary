@@ -10,10 +10,12 @@
 
 #include <set>
 
+using ComplexityScalarType = long double;
+
 struct FunctionComplexity {
-    long double Total;
-    long double Io;
-    long double Memory;
+    ComplexityScalarType Total;
+    ComplexityScalarType Io;
+    ComplexityScalarType Memory;
 
     constexpr FunctionComplexity();
 
@@ -21,7 +23,7 @@ struct FunctionComplexity {
 
     constexpr FunctionComplexity(unsigned Total, unsigned Io);
 
-    constexpr FunctionComplexity(long double Total, long double Io, long double Memory = 0.0);
+    constexpr FunctionComplexity(ComplexityScalarType Total, ComplexityScalarType Io, ComplexityScalarType Memory = 0.0);
 
     constexpr FunctionComplexity operator+(const FunctionComplexity &other) const;
 
@@ -29,7 +31,7 @@ struct FunctionComplexity {
 
     static constexpr FunctionComplexity IoAsComplexity(unsigned IoCalls);
 
-    static constexpr FunctionComplexity IoAsComplexity(long double IoCalls);
+    static constexpr FunctionComplexity IoAsComplexity(ComplexityScalarType IoCalls);
 };
 
 using ResultIoComplexity = llvm::MapVector<const llvm::Function *, FunctionComplexity>;
@@ -37,9 +39,8 @@ using ResultIoComplexity = llvm::MapVector<const llvm::Function *, FunctionCompl
 struct BoundaryAnalysis : public llvm::AnalysisInfoMixin<BoundaryAnalysis> {
     using Result = ResultIoComplexity;
 
-    BoundaryAnalysis(const std::set<std::string> &ExternalIoFunctionNames,
-               const std::set<std::string> &ExternalMemoryFunctionNames) : ExternalIoFunctionNames(
-            ExternalIoFunctionNames), ExternalMemoryFunctionNames(ExternalMemoryFunctionNames) {}
+    BoundaryAnalysis(const std::map<std::string, FunctionComplexity> &ExternalComplexityInfo) :
+            ExternalComplexityInfo(ExternalComplexityInfo) {}
 
     Result run(llvm::Module &M, llvm::ModuleAnalysisManager &);
 
@@ -52,7 +53,7 @@ struct BoundaryAnalysis : public llvm::AnalysisInfoMixin<BoundaryAnalysis> {
 private:
     static llvm::AnalysisKey Key;
     friend struct llvm::AnalysisInfoMixin<BoundaryAnalysis>;
-    std::set<std::string> ExternalIoFunctionNames;
+    std::map<std::string, FunctionComplexity> ExternalComplexityInfo;
     std::set<std::string> ExternalMemoryFunctionNames;
 };
 

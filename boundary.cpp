@@ -186,7 +186,8 @@ constexpr FunctionComplexity::FunctionComplexity() : Total(0), Io(0), Memory(0) 
 constexpr FunctionComplexity::FunctionComplexity(unsigned int Total, unsigned int Io)
         : Total(Total), Io(Io), Memory(0) {}
 
-constexpr FunctionComplexity::FunctionComplexity(long double Total, long double Io, long double Memory)
+constexpr FunctionComplexity::FunctionComplexity(ComplexityScalarType Total, ComplexityScalarType Io,
+                                                 ComplexityScalarType Memory)
         : Total(Total), Io(Io), Memory(Memory) {}
 
 constexpr FunctionComplexity FunctionComplexity::operator+(const FunctionComplexity &other) const {
@@ -204,7 +205,7 @@ constexpr FunctionComplexity FunctionComplexity::IoAsComplexity(unsigned int IoC
     return FunctionComplexity(IoCalls > 0 ? IoCalls : 1, IoCalls);
 }
 
-constexpr FunctionComplexity FunctionComplexity::IoAsComplexity(long double IoCalls) {
+constexpr FunctionComplexity FunctionComplexity::IoAsComplexity(ComplexityScalarType IoCalls) {
     return FunctionComplexity(IoCalls > 0 ? IoCalls : 1, IoCalls);
 }
 
@@ -276,6 +277,22 @@ static FunctionComplexity nonCallInstructionCost(const llvm::Instruction &Ins) {
         return BRANCH_COST * PROC_OP;
     } else if (auto GetElementPtrInst = llvm::dyn_cast<llvm::GetElementPtrInst>(&Ins); nullptr != GetElementPtrInst) {
         return 1 * MEM_OP;
+    } else if (auto SwitchInst = llvm::dyn_cast<llvm::SwitchInst>(&Ins); nullptr != SwitchInst) {
+        return static_cast<unsigned int>(std::log2(SwitchInst->getNumCases())) * PROC_OP;
+    } else if (auto PHINode = llvm::dyn_cast<llvm::PHINode>(&Ins); nullptr != PHINode) {
+        return 0 * PROC_OP;
+    } else if (auto SelectInst = llvm::dyn_cast<llvm::SelectInst>(&Ins); nullptr != SelectInst) {
+        return 1 * PROC_OP;
+    } else if (auto ExtractValueInst = llvm::dyn_cast<llvm::ExtractValueInst>(&Ins); nullptr != ExtractValueInst) {
+        return 1 * MEM_OP;
+    } else if (auto LandingPadInst = llvm::dyn_cast<llvm::LandingPadInst>(&Ins); nullptr != LandingPadInst) {
+        return 0 * PROC_OP;
+    } else if (auto UnreachableInst = llvm::dyn_cast<llvm::UnreachableInst>(&Ins); nullptr != UnreachableInst) {
+        return 0 * PROC_OP;
+    } else if (auto InsertValueInst = llvm::dyn_cast<llvm::InsertValueInst>(&Ins); nullptr != InsertValueInst) {
+        return 1 * MEM_OP;
+    } else if (auto ResumeInst = llvm::dyn_cast<llvm::ResumeInst>(&Ins); nullptr != ResumeInst) {
+        return 1 * PROC_OP;
     } else {
         throw std::runtime_error(std::string("unknown instruction ") + Ins.getOpcodeName());
     }
@@ -283,8 +300,8 @@ static FunctionComplexity nonCallInstructionCost(const llvm::Instruction &Ins) {
 
 static FunctionComplexity
 complexityOf(llvm::Function &Func, std::vector<int> &State, std::vector<FunctionComplexity> &ResVec,
-             const std::map<llvm::Function *, int> &FuncMapping, const std::set<std::string> &IoCalls,
-             const std::set<std::string> &MemoryCalls, llvm::ProfileSummaryInfo &PSI,
+             const std::map<llvm::Function *, int> &FuncMapping,
+             const std::map<std::string, FunctionComplexity> &ExternalComplexityInfo, llvm::ProfileSummaryInfo &PSI,
              llvm::FunctionAnalysisManager &FAM) {
     enum {
         STATE_INIT = 0,
@@ -296,6 +313,12 @@ complexityOf(llvm::Function &Func, std::vector<int> &State, std::vector<Function
         return ResVec[FuncIdx];
     } else if (State[FuncIdx] == STATE_PROCESSING) {
         return {};
+    } else if (ExternalComplexityInfo.count(Func.getName().str()) > 0) {
+        auto &Res = ResVec[FuncIdx];
+
+        Res = ExternalComplexityInfo.at(Func.getName().str());
+        State[FuncIdx] = STATE_VISITED;
+        return Res;
     }
     State[FuncIdx] = STATE_PROCESSING;
     auto &Res = ResVec[FuncIdx];
@@ -305,7 +328,7 @@ complexityOf(llvm::Function &Func, std::vector<int> &State, std::vector<Function
         auto &BFI = FAM.getResult<llvm::BlockFrequencyAnalysis>(Func);
         auto EntryFreq = BFI.getBlockFreq(&Func.getEntryBlock()).getFrequency();
         for (auto &BB: Func) {
-            auto Freq = (long double) BFI.getBlockFreq(&BB).getFrequency() / EntryFreq;
+            auto Freq = (ComplexityScalarType) BFI.getBlockFreq(&BB).getFrequency() / EntryFreq;
             for (auto &Ins: BB) {
                 // If this is a call instruction then CB will be not null.
                 if (auto *CB = llvm::dyn_cast<llvm::CallBase>(&Ins); CB != nullptr) {
@@ -316,7 +339,7 @@ complexityOf(llvm::Function &Func, std::vector<int> &State, std::vector<Function
                         continue;
                     }
                     Res += Freq *
-                           complexityOf(*DirectInvoc, State, ResVec, FuncMapping, IoCalls, MemoryCalls, PSI, FAM);
+                           complexityOf(*DirectInvoc, State, ResVec, FuncMapping, ExternalComplexityInfo, PSI, FAM);
                 } else {
                     Res += Freq * nonCallInstructionCost(Ins);
                 }
@@ -327,28 +350,22 @@ complexityOf(llvm::Function &Func, std::vector<int> &State, std::vector<Function
     if (Res.Total == 0) {
         Res.Total = 1;
     }
-    if (IoCalls.count(Func.getName().str())) {
-        Res.Io = Res.Total;
-        Res.Memory = 0;
-    } else if (MemoryCalls.count(Func.getName().str())) {
-        Res.Io = 0;
-        Res.Memory = Res.Total;
-    }
 
     State[FuncIdx] = STATE_VISITED;
 
     return Res;
 }
 
-static int dfs(llvm::Function &Func, std::vector<int> &State, std::vector<int> &ResVec,
-               const std::map<llvm::Function *, int> &FuncMapping, const std::set<std::string> &TargetCalls) {
+static ComplexityScalarType dfs(llvm::Function &Func, std::vector<int> &State, std::vector<int> &ResVec,
+                                const std::map<llvm::Function *, int> &FuncMapping,
+                                const std::map<std::string, FunctionComplexity> &Leaves) {
     enum {
         STATE_INIT = 0,
         STATE_VISITED = 1,
         STATE_PROCESSING = 2,
     };
     if (FuncMapping.count(&Func) == 0) {
-        return TargetCalls.count(Func.getFunction().getName().str());
+        return Leaves.at(Func.getFunction().getName().str()).Total;
     }
     int FuncIdx = FuncMapping.at(&Func);
     if (State[FuncIdx] == STATE_VISITED) {
@@ -357,7 +374,7 @@ static int dfs(llvm::Function &Func, std::vector<int> &State, std::vector<int> &
         return 0;
     }
     State[FuncIdx] = STATE_PROCESSING;
-    ResVec[FuncIdx] = TargetCalls.count(Func.getFunction().getName().str());
+    ResVec[FuncIdx] = Leaves.count(Func.getFunction().getName().str());
 
     for (auto &BB: Func) {
         for (auto &Ins: BB) {
@@ -373,7 +390,7 @@ static int dfs(llvm::Function &Func, std::vector<int> &State, std::vector<int> &
             if (nullptr == DirectInvoc) {
                 continue;
             }
-            ResVec[FuncIdx] += dfs(*DirectInvoc, State, ResVec, FuncMapping, TargetCalls);
+            ResVec[FuncIdx] += dfs(*DirectInvoc, State, ResVec, FuncMapping, Leaves);
         }
     }
 
@@ -383,7 +400,7 @@ static int dfs(llvm::Function &Func, std::vector<int> &State, std::vector<int> &
 }
 
 static void
-LoadFunctionProfiles(std::set<std::string> &OutIoFunctionNames, std::set<std::string> &OutMemoryFunctionNames) {
+LoadFunctionProfiles(std::map<std::string, FunctionComplexity> &OutComplexityInfo) {
     for (auto &Path: LoadProfilesFrom) {
         std::ifstream In(Path);
         if (!In) {
@@ -393,27 +410,11 @@ LoadFunctionProfiles(std::set<std::string> &OutIoFunctionNames, std::set<std::st
         std::string Mode;
 
         while (In) {
-            In >> Name >> Mode;
+            ComplexityScalarType Total, Io, Memory;
+            In >> Name >> Total >> Io >> Memory;
             if (!In) break;
 
-            for (char M: Mode) {
-                switch (M) {
-                    case 'I':
-                        OutIoFunctionNames.insert(Name);
-                        break;
-                    case 'M':
-                        OutMemoryFunctionNames.insert(Name);
-                        break;
-                    default:
-                        std::string msg = "Unknown function mode `";
-                        msg.append(Mode);
-                        msg.append("` for function `");
-                        msg.append(Name);
-                        msg.append("` at file ");
-                        msg.append(Path);
-                        throw std::runtime_error(msg);
-                }
-            }
+            OutComplexityInfo[Name] = FunctionComplexity(Total, Io, Memory);
         }
     }
 }
@@ -435,20 +436,25 @@ BoundaryAnalysis::Result BoundaryAnalysis::runOnModule(llvm::Module &Module, llv
         std::vector<int> State(FuncMapping.size());
         std::vector<int> ResVec(FuncMapping.size());
         for (auto &Func: Module) {
-            int res = dfs(Func, State, ResVec, FuncMapping, ExternalIoFunctionNames);
-            Res.insert(std::make_pair(&Func, FunctionComplexity::IoAsComplexity((long double) res)));
+            int SearchRes = dfs(Func, State, ResVec, FuncMapping, ExternalComplexityInfo);
+            Res.insert(std::make_pair(&Func, FunctionComplexity::IoAsComplexity((ComplexityScalarType) SearchRes)));
         }
     } else if (BoundaryAnalysisDirection == AnalysisDirection::BFS) {
-        auto IoFuncs = bfsBinary(Module, FuncMapping, ExternalIoFunctionNames);
-        for (auto F: IoFuncs) {
-            Res[F] = FunctionComplexity::IoAsComplexity((long double) 1);
+        std::set<std::string> InitialRoots;
+        for (auto &[k, v]: ExternalComplexityInfo) {
+            if (v.Io > 0) {
+                InitialRoots.insert(k);
+            }
+        }
+        auto SearchRes = bfsBinary(Module, FuncMapping, InitialRoots);
+        for (auto F: SearchRes) {
+            Res[F] = FunctionComplexity::IoAsComplexity((ComplexityScalarType) 1);
         }
     } else if (BoundaryAnalysisDirection == AnalysisDirection::COMPLEXITY) {
         std::vector<int> State(FuncMapping.size());
         std::vector<FunctionComplexity> ResVec(FuncMapping.size());
         for (auto &Func: Module) {
-            auto res = complexityOf(Func, State, ResVec, FuncMapping, ExternalIoFunctionNames,
-                                    ExternalMemoryFunctionNames, PSI, FAM);
+            auto res = complexityOf(Func, State, ResVec, FuncMapping, ExternalComplexityInfo, PSI, FAM);
             Res.insert(std::make_pair(&Func, res));
         }
     } else {
@@ -540,12 +546,15 @@ llvm::PassPluginLibraryInfo getBoundaryPluginInfo() {
                 // for "MAM.getResult<<ANALYSIS_NAME>>(Module)" syntax
                 PB.registerAnalysisRegistrationCallback(
                         [](llvm::ModuleAnalysisManager &MAM) {
-                            std::set<std::string> ExternalIoFunctionNames = DefaultIoFunctionNames;
-                            std::set<std::string> ExternalMemoryFunctionNames;
-                            LoadFunctionProfiles(ExternalIoFunctionNames, ExternalMemoryFunctionNames);
+                            std::map<std::string, FunctionComplexity> ExternalComplexityInfo;
+                            for (auto IoFn: DefaultIoFunctionNames) {
+                                ExternalComplexityInfo[IoFn] = FunctionComplexity::IoAsComplexity(
+                                        (ComplexityScalarType) 1);
+                            }
+                            LoadFunctionProfiles(ExternalComplexityInfo);
                             MAM.registerPass(
                                     [&] {
-                                        return BoundaryAnalysis(ExternalIoFunctionNames, ExternalMemoryFunctionNames);
+                                        return BoundaryAnalysis(ExternalComplexityInfo);
                                     });
                         });
             }};
@@ -644,13 +653,11 @@ void BoundaryInstrument::getAnalysisUsage(llvm::AnalysisUsage &AU) const {
 llvm::PreservedAnalyses BoundaryAnalysisDumper::run(llvm::Module &M, llvm::ModuleAnalysisManager &MAM) {
     std::filesystem::create_directory(OutDirName.str());
     std::ofstream Out(OutDirName.str() + "/" + M.getName().str() + ".txt");
-    for (auto &[Func, CallCount]: MAM.getResult<BoundaryAnalysis>(M)) {
-        auto IsIo = CallCount.Io > 0;
-        auto IsMemoryExpensive = CallCount.Memory > 0;
-        if (IsIo || IsMemoryExpensive) Out << Func->getName().str() << " ";
-        if (IsIo) Out << "I";
-        if (IsMemoryExpensive) Out << "M";
-        Out << "\n";
+    for (auto &[Func, Complexity]: MAM.getResult<BoundaryAnalysis>(M)) {
+        if (Complexity.Io > 0 || Complexity.Memory > 0) {
+            Out << Func->getName().str() << " " << Complexity.Total << " " << Complexity.Io << " " << Complexity.Memory
+                << "\n";
+        }
     }
 
     return llvm::PreservedAnalyses::all();
