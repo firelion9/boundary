@@ -637,6 +637,8 @@ llvm::PreservedAnalyses BoundaryInstrument::run(llvm::Module &M, llvm::ModuleAna
         if (Intrinsics.count(Func.getName().str()) != 0) continue;
 
         FunctionComplexity &Complexity = Data[&Func];
+        if (Complexity.Total < 100) continue;
+
         if (Complexity.Io >= Complexity.Total / 8 && (EnterIoMarker || ExitIoMarker)) {
             instrumentFunction(Func, EnterIoMarker, ExitIoMarker);
         } else if (Complexity.Memory >= Complexity.Total / 2 && (EnterMemoryMarker || EnterMemoryMarker)) {

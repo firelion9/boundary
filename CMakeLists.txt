@@ -23,6 +23,7 @@ endif ()
 
 # Use the same C++ standard as LLVM does
 set(CMAKE_CXX_STANDARD 17 CACHE STRING "")
+set(CMAKE_C_STANDARD 17 CACHE STRING "")
 
 # LLVM is normally built without RTTI. Be consistent with that.
 if(NOT LLVM_ENABLE_RTTI)
@@ -33,3 +34,10 @@ set(PLUGIN_NAME Boundary)
 add_library(${PLUGIN_NAME} SHARED boundary.cpp)
 target_include_directories(${PLUGIN_NAME} PRIVATE "include")
 target_link_libraries(${PLUGIN_NAME} "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>")
+
+set(SHED_NAME Shed)
+add_library(${SHED_NAME} SHARED shed.cpp)
+target_include_directories(${SHED_NAME} PRIVATE "include")
+
+add_library(${SHED_NAME}C SHARED shed.c)
+target_include_directories(${SHED_NAME}C PRIVATE "include")
