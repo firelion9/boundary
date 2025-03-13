@@ -41,3 +41,7 @@ target_include_directories(${SHED_NAME} PRIVATE "include")
 
 add_library(${SHED_NAME}C SHARED shed.c)
 target_include_directories(${SHED_NAME}C PRIVATE "include")
+
+set(PERF_TEST_NAME PerfTest)
+add_executable(${PERF_TEST_NAME} perf_test.c)
+target_include_directories(${PERF_TEST_NAME} PRIVATE "include")
