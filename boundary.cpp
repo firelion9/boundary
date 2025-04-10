@@ -591,6 +591,16 @@ static void printStaticCCResult(llvm::raw_ostream &OutS,
     OutS << std::string(123, '-') << "\n\n";
 }
 
+static bool isReturningToCaller(const llvm::Instruction *Inst) {
+    if (llvm::isa<llvm::ReturnInst>(Inst) || llvm::isa<llvm::ResumeInst>(Inst)) {
+        return true;
+    } else if (auto CleanupRet = llvm::dyn_cast<llvm::CleanupReturnInst>(Inst); CleanupRet != nullptr) {
+        return CleanupRet->unwindsToCaller();
+    } else {
+        return false;
+    }
+}
+
 static void instrumentFunction(llvm::Function &Func, const std::optional<llvm::FunctionCallee> &EnterMarker,
                                const std::optional<llvm::FunctionCallee> &ExitMarker) {
     auto &Entry = Func.getEntryBlock();
@@ -600,7 +610,7 @@ static void instrumentFunction(llvm::Function &Func, const std::optional<llvm::F
     if (ExitMarker) {
         for (auto &BB: Func) {
             auto Terminator = BB.getTerminator();
-            if (Terminator->willReturn()) {
+            if (isReturningToCaller(Terminator)) {
                 llvm::CallInst::Create(ExitMarker.value(), {}, llvm::Twine(), Terminator);
             }
         }
