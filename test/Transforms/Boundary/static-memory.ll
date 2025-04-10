@@ -1,5 +1,5 @@
 ; Test Memory blocks instrumentation in simple case.
-; RUN: opt < %s -load-pass-plugin libBoundary.so -passes="instrument<boundary>" --load-function-profiles=stdlib++-io-profile.txt --intrinsic-memory-enter="memory_enter" --intrinsic-memory-exit="memory_exit" -S | FileCheck %s --check-prefix=USE
+; RUN: opt < %s -load-pass-plugin libBoundary.so -passes="instrument<boundary>" --load-function-profiles=stdlib++-io-profile.txt --intrinsic-memory-enter="memory_enter" --intrinsic-memory-exit="memory_exit" --complexity-threshold=0 -S | FileCheck %s --check-prefix=USE
 
 define dso_local void @cpy_off(ptr %in, ptr %out, i32 %out_off) {
 ; USE: call void @memory_enter

@@ -90,6 +90,9 @@ static llvm::cl::opt<std::string> ExitMemoryIntrinsic("intrinsic-memory-exit", l
                                                       llvm::cl::desc(
                                                               "Set \"exit memory block\" intrinsic name (if empty, intrinsic wont be emitted)"));
 
+static llvm::cl::opt<unsigned> InstrumentationComplexityThreshold("complexity-threshold", llvm::cl::init(100),
+                                                      llvm::cl::desc("Set minimum function complexity for instrumentation. Boundary won't insert any intrinsics in functions with lower complexity"));
+
 #ifdef D_LINK_TIME_DUMPER
 constexpr bool LINK_TIME_DUMPER = true;
 #else
@@ -619,6 +622,8 @@ llvm::PreservedAnalyses BoundaryInstrument::run(llvm::Module &M, llvm::ModuleAna
             M.getOrInsertFunction(llvm::StringRef(ExitMemoryIntrinsic),
                                   llvm::FunctionType::get(llvm::Type::getVoidTy(M.getContext()), false)));
 
+    unsigned Threshold = InstrumentationComplexityThreshold;
+
     if (!EnterIoMarker && !ExitIoMarker && !EnterMemoryMarker && !ExitIoMarker) {
         return llvm::PreservedAnalyses::all();
     }
@@ -637,7 +642,7 @@ llvm::PreservedAnalyses BoundaryInstrument::run(llvm::Module &M, llvm::ModuleAna
         if (Intrinsics.count(Func.getName().str()) != 0) continue;
 
         FunctionComplexity &Complexity = Data[&Func];
-        if (Complexity.Total < 100) continue;
+        if (Complexity.Total < Threshold) continue;
 
         if (Complexity.Io >= Complexity.Total / 8 && (EnterIoMarker || ExitIoMarker)) {
             instrumentFunction(Func, EnterIoMarker, ExitIoMarker);

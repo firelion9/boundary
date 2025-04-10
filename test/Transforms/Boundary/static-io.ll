@@ -1,5 +1,5 @@
 ; Test I/O blocks instrumentation in simple case.
-; RUN: opt < %s -load-pass-plugin libBoundary.so -passes="instrument<boundary>" --load-function-profiles=stdlib++-io-profile.txt --intrinsic-io-enter="io_enter" --intrinsic-io-exit="io_exit" -S | FileCheck %s --check-prefix=USE
+; RUN: opt < %s -load-pass-plugin libBoundary.so -passes="instrument<boundary>" --load-function-profiles=stdlib++-io-profile.txt --intrinsic-io-enter="io_enter" --intrinsic-io-exit="io_exit" --complexity-threshold=0 -S | FileCheck %s --check-prefix=USE
 
 %"class.std::ios_base::Init" = type { i8 }
 %"class.std::basic_ostream" = type { ptr, %"class.std::basic_ios" }
