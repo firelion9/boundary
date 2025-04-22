@@ -48,8 +48,8 @@ namespace AnalysisDirection {
 static llvm::cl::list<std::string> LoadProfilesFrom("load-function-profiles", llvm::cl::ZeroOrMore,
                                                     llvm::cl::desc("Files containing function profiles"));
 
-static llvm::cl::list<std::string> IOPasses("boundary-pass", llvm::cl::ZeroOrMore,
-                                            llvm::cl::desc("Algorithm for call graph analysis (bfs or dfs)"));
+static llvm::cl::list<std::string> BoundaryPasses("boundary-pass", llvm::cl::ZeroOrMore,
+                                                  llvm::cl::desc("Boundary output passes (print, dump and/or instrument)"));
 
 static llvm::cl::opt<AnalysisDirection::AnalysisDirection> BoundaryAnalysisDirection("boundary-analysis-direction",
                                                                                      llvm::cl::init(
@@ -212,7 +212,7 @@ constexpr FunctionComplexity FunctionComplexity::IoAsComplexity(ComplexityScalar
     return FunctionComplexity(IoCalls > 0 ? IoCalls : 1, IoCalls);
 }
 
-constexpr FunctionComplexity operator*(unsigned int scl, const FunctionComplexity &c) {
+constexpr FunctionComplexity operator*(ComplexityScalarType scl, const FunctionComplexity &c) {
     return {
             scl * c.Total,
             scl * c.Io,
@@ -331,7 +331,8 @@ complexityOf(llvm::Function &Func, std::vector<int> &State, std::vector<Function
         auto &BFI = FAM.getResult<llvm::BlockFrequencyAnalysis>(Func);
         auto EntryFreq = BFI.getBlockFreq(&Func.getEntryBlock()).getFrequency();
         for (auto &BB: Func) {
-            auto Freq = (ComplexityScalarType) BFI.getBlockFreq(&BB).getFrequency() / EntryFreq;
+            auto RawFreq = BFI.getBlockFreq(&BB).getFrequency();
+            auto Freq = (ComplexityScalarType) RawFreq / EntryFreq;
             for (auto &Ins: BB) {
                 // If this is a call instruction then CB will be not null.
                 if (auto *CB = llvm::dyn_cast<llvm::CallBase>(&Ins); CB != nullptr) {
@@ -536,14 +537,18 @@ llvm::PassPluginLibraryInfo getBoundaryPluginInfo() {
                 PB.registerModuleAnalyses(MAM);
 
                 PB.registerOptimizerLastEPCallback([](llvm::ModulePassManager &MPM, llvm::OptimizationLevel) {
-                    if (std::count(IOPasses.begin(), IOPasses.end(), "print") != 0) {
-                        MPM.addPass(BoundaryAnalysisPrinter(llvm::errs()));
-                    }
-                    if (std::count(IOPasses.begin(), IOPasses.end(), "dump") != 0) {
-                        MPM.addPass(BoundaryAnalysisDumper(ModeDumpDir));
-                    }
-                    if (std::count(IOPasses.begin(), IOPasses.end(), "instrument") != 0) {
-                        MPM.addPass(BoundaryInstrument());
+                    for (auto &pass : BoundaryPasses) {
+                        if (pass == "print") {
+                            MPM.addPass(BoundaryAnalysisPrinter(llvm::errs()));
+                        } else if (pass == "dump") {
+                            MPM.addPass(BoundaryAnalysisDumper(ModeDumpDir));
+                        } else if (pass == "instrument") {
+                            MPM.addPass(BoundaryInstrument());
+                        } else {
+                            auto msg = "Unsupported boundary pass: " + pass;
+                            llvm::errs() << msg << "\n";
+                            throw std::runtime_error(msg);
+                        }
                     }
                 });
                 // for "MAM.getResult<<ANALYSIS_NAME>>(Module)" syntax
@@ -612,6 +617,10 @@ static void instrumentFunction(llvm::Function &Func, const std::optional<llvm::F
             auto Terminator = BB.getTerminator();
             if (isReturningToCaller(Terminator)) {
                 llvm::CallInst::Create(ExitMarker.value(), {}, llvm::Twine(), Terminator);
+            } else if (llvm::isa<llvm::UnreachableInst>(Terminator)) {
+                if (auto Prev = Terminator->getPrevNode(); Prev != nullptr) {
+                    llvm::CallInst::Create(ExitMarker.value(), {}, llvm::Twine(), Prev);
+                }
             }
         }
     }
