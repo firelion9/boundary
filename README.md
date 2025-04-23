@@ -11,12 +11,12 @@ Install LLVM and LLVM LLD:
 sudo apt install llvm-18 lld-18
 ```
 
-Set environmental variable `LLVM_DIR` to LLVM installation dir, run cmake and then make. Minimum supported version is LLVM 15. 
+Set environmental variable `LLVM_DIR` to LLVM installation dir (default value is `/usr/lib/llvm-18`) and run `./build.sh`.
+Alternatively, you can manually run cmake. Minimum supported version is LLVM 15. 
 ```bash
 export LLVM_DIR=/usr/lib/llvm-18 
-cmake ./ -B cmake-build
-cd cmake-build
-make
+cmake ./ -B cmake-build -DLLVM_ROOT="$LLVM_PATH"
+cmake --build cmake-build
 ```
 
 Using Boundary
@@ -27,11 +27,17 @@ Boundary is LLVM pass plugin library, so you can use it with any LLVM tool.
 For clang, you should prefix any boundary option with `-mllvm`.
 
 ```bash
-clang -fplugin=./libBoundary.so -fpass-plugin=./libBoundary.so -mllvm --boundary-pass="print" --load-function-profiles="../stdlib++-io-profile.txt" ...
+clang -fplugin=./cmake-build/libBoundary.so -fpass-plugin=./cmake-build/libBoundary.so -mllvm --boundary-pass="print" --load-function-profiles="stdlib++-io-profile.txt" ...
 ```
 
 ```bash
-opt -load-pass-plugin ./libBoundary.so -passes="print<boundary>" --load-function-profiles="../stdlib++-io-profile.txt" ...
+opt -load-pass-plugin ./cmake-build/libBoundary.so -passes="print<boundary>" --load-function-profiles="stdlib++-io-profile.txt" ...
+```
+
+This repository also provides an auxiliary script `clang-with-boundary.sh` which automatically compiles the plugin and runs clang with correct minimum plugin setup.
+Using it, we can rewrite the previous example with clang in a shorter way (note that it also uses lld linker):
+```bash
+./clang-with-boundary.sh -mllvm --boundary-pass="print" --load-function-profiles="stdlib++-io-profile.txt" ...
 ```
 
 The primary pass of the library is instrument pass (`--boundary-pass="instrument"` or `-passes="instrument<boundary>"`).
@@ -49,15 +55,37 @@ clang -fplugin=path/to/libBoundary.so -fpass-plugin=path/to/libBoundary.so --ld-
 Profile will be written under `function_modes` folder.
 
 For even more accurate results you may wish to utilize profiling data.
-To do so, you should compile your program with `--fprofile-generate` flag (it is not necessary to use boundary plugin on this step),
+To do so, you should compile your program with `-fprofile-generate` flag (it is not necessary to use boundary plugin on this step),
 run compiled program, merge raw profiling data with `llvm-profdata merge *.profraw > prof.profdata` 
-and then pass resulting `prof.profdata` to new compilation with boundary using `--fprofile-use=prof.profdata` option.
+and then pass resulting `prof.profdata` to new compilation with boundary using `-fprofile-use=prof.profdata` option.
+```bash
+clang -fprofile-generate app.cpp -o app
+# clean old profiling data
+rm *.profraw
+# You may wish to run the app more then once
+./app
+llvm-profdata merge *.profraw > prof.profdata
+./clang-with-boundary.sh -fprofile-use=prof.profdata -mllvm --boundary-pass="instrument" ...
+```
 
 Testing
 =======
 
-You can run test from root directory of this repository in such way (requires `lit` python package or portable version from `$LLVM_DIR/build/utils/lit`): 
+This repository provides a bash script to build the plugin and execute tests on it. You may require to install `lit` before using it:
+```bash
+pip install lit
+```
+Now, you can set `LLVM_DIR` and run tests:
+```bash
+LLVM_DIR=</llvm/dir> ./run-test.sh
+```
+
+Alternatively, you can manually compile boundary and then run tests using `lit` directly: 
 
 ```bash
-LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)/cmake-build lit --path $LLVM_DIR/bin/ -v test/
+LD_LIBRARY_PATH=$LD_LIBRARY_PATH:</absolute/path/to/libBoundary.so/directory> lit --path </llvm/dir>/bin/ -v test/
 ```
+
+Be sure to use the same version of LLVM when compiling boundary and when using it as plugin or running tests.
+Otherwise, you are likely to catch a segmentation fault during LLVM initialization.
+
