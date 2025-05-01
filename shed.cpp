@@ -120,3 +120,11 @@ extern "C" void memory_enter() {
 extern "C" void memory_exit() {
     pop_mode(MEMORY);
 }
+
+extern "C" void cpu_enter() {
+    push_mode(CPU);
+}
+
+extern "C" void cpu_exit() {
+    pop_mode(CPU);
+}

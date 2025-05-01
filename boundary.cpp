@@ -90,6 +90,14 @@ static llvm::cl::opt<std::string> ExitMemoryIntrinsic("intrinsic-memory-exit", l
                                                       llvm::cl::desc(
                                                               "Set \"exit memory block\" intrinsic name (if empty, intrinsic wont be emitted)"));
 
+static llvm::cl::opt<std::string> EnterCpuIntrinsic("intrinsic-cpu-enter", llvm::cl::init(""),
+                                                       llvm::cl::desc(
+                                                               "Set \"enter cpu block\" intrinsic name (if empty, intrinsic wont be emitted)"));
+
+static llvm::cl::opt<std::string> ExitCpuIntrinsic("intrinsic-cpu-exit", llvm::cl::init(""),
+                                                      llvm::cl::desc(
+                                                              "Set \"exit cpu block\" intrinsic name (if empty, intrinsic wont be emitted)"));
+
 static llvm::cl::opt<unsigned> InstrumentationComplexityThreshold("complexity-threshold", llvm::cl::init(100),
                                                       llvm::cl::desc("Set minimum function complexity for instrumentation. Boundary won't insert any intrinsics in functions with lower complexity"));
 
@@ -202,6 +210,10 @@ constexpr FunctionComplexity &FunctionComplexity::operator+=(const FunctionCompl
     Io += other.Io;
     Memory += other.Memory;
     return *this;
+}
+
+constexpr ComplexityScalarType FunctionComplexity::Cpu() const {
+    return Total - Io - Memory;
 }
 
 constexpr FunctionComplexity FunctionComplexity::IoAsComplexity(unsigned int IoCalls) {
@@ -640,10 +652,16 @@ llvm::PreservedAnalyses BoundaryInstrument::run(llvm::Module &M, llvm::ModuleAna
     auto ExitMemoryMarker = ExitMemoryIntrinsic.empty() ? std::nullopt : std::make_optional(
             M.getOrInsertFunction(llvm::StringRef(ExitMemoryIntrinsic),
                                   llvm::FunctionType::get(llvm::Type::getVoidTy(M.getContext()), false)));
+    auto EnterCpuMarker = EnterCpuIntrinsic.empty() ? std::nullopt : std::make_optional(
+            M.getOrInsertFunction(llvm::StringRef(EnterCpuIntrinsic),
+                                  llvm::FunctionType::get(llvm::Type::getVoidTy(M.getContext()), false)));
+    auto ExitCpuMarker = ExitCpuIntrinsic.empty() ? std::nullopt : std::make_optional(
+            M.getOrInsertFunction(llvm::StringRef(ExitCpuIntrinsic),
+                                  llvm::FunctionType::get(llvm::Type::getVoidTy(M.getContext()), false)));
 
     unsigned Threshold = InstrumentationComplexityThreshold;
 
-    if (!EnterIoMarker && !ExitIoMarker && !EnterMemoryMarker && !ExitIoMarker) {
+    if (!EnterIoMarker && !ExitIoMarker && !EnterMemoryMarker && !ExitMemoryMarker && !EnterCpuMarker && !ExitCpuMarker) {
         return llvm::PreservedAnalyses::all();
     }
 
@@ -652,6 +670,8 @@ llvm::PreservedAnalyses BoundaryInstrument::run(llvm::Module &M, llvm::ModuleAna
     if (!ExitIoIntrinsic.empty()) Intrinsics.insert(ExitIoIntrinsic);
     if (!EnterMemoryIntrinsic.empty()) Intrinsics.insert(EnterMemoryIntrinsic);
     if (!ExitMemoryIntrinsic.empty()) Intrinsics.insert(ExitMemoryIntrinsic);
+    if (!EnterCpuIntrinsic.empty()) Intrinsics.insert(EnterCpuIntrinsic);
+    if (!ExitCpuIntrinsic.empty()) Intrinsics.insert(ExitCpuIntrinsic);
 
     for (auto &Func: M) {
         // External function, body is not available
@@ -665,7 +685,9 @@ llvm::PreservedAnalyses BoundaryInstrument::run(llvm::Module &M, llvm::ModuleAna
 
         if (Complexity.Io >= Complexity.Total / 8 && (EnterIoMarker || ExitIoMarker)) {
             instrumentFunction(Func, EnterIoMarker, ExitIoMarker);
-        } else if (Complexity.Memory >= Complexity.Total / 2 && (EnterMemoryMarker || EnterMemoryMarker)) {
+        } else if (Complexity.Cpu() > Complexity.Total / 3 && (EnterCpuMarker || ExitCpuMarker)) {
+            instrumentFunction(Func, EnterCpuMarker, ExitCpuMarker);
+        } else if (Complexity.Memory >= Complexity.Total / 2 && (EnterMemoryMarker || ExitMemoryMarker)) {
             instrumentFunction(Func, EnterMemoryMarker, ExitMemoryMarker);
         }
     }

@@ -153,3 +153,11 @@ void memory_enter() {
 void memory_exit() {
     pop_mode(MEMORY);
 }
+
+void cpu_enter() {
+    push_mode(CPU);
+}
+
+void cpu_exit() {
+    pop_mode(CPU);
+}

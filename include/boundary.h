@@ -29,6 +29,8 @@ struct FunctionComplexity {
 
     constexpr FunctionComplexity &operator+=(const FunctionComplexity &other);
 
+    constexpr ComplexityScalarType Cpu() const;
+
     static constexpr FunctionComplexity IoAsComplexity(unsigned IoCalls);
 
     static constexpr FunctionComplexity IoAsComplexity(ComplexityScalarType IoCalls);
