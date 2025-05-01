@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <malloc.h>
 #include <time.h>
+#include <math.h>
 
 #define TMP_PATH "perf_test"
 #define N 1000000
@@ -98,5 +99,5 @@ int main() {
     printf("time per iteration: ");
     fflush(stdout);
     fprintf(stderr, "%f", mean);
-    printf(" +- %f s\n", var);
+    printf(" +- %f s\n", sqrt(var));
 }
