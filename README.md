@@ -68,6 +68,23 @@ llvm-profdata merge *.profraw > prof.profdata
 ./clang-with-boundary.sh -fprofile-use=prof.profdata -mllvm --boundary-pass="instrument" ...
 ```
 
+Supported CLI options
+==============
++ `--load-function-profiles=<file>` -- loads complexity information for external function from specified file. 
+  May be used multiple times
++ `--boundary-analysis-direction=<complexity|bfs|dfs>` -- sets call graph analysis algorithm. 
+  Preferred (and default) value is `complexity`, because 2 other legacy options are unable to gather complete complexity information
++ `--boundary-pass=<print|dump|instrument>` -- enables output passes. May be used multiple times to enable multiple passes. 
+  For tools like opt prefer using native option `-passes` with syntax like `-passes=print<boundary>` (angle brackets are part of syntax here). Available values are:
+  + `print` -- outputs a human-readable function complexity table to stderr
+  + `dump` -- writes function complexity profile under directory specified by `--mode-dump-dir`. The profile can be then passed to `--load-function-profiles`
+  + `instrument` -- inserts intrinsics to result code based on computed function complexity values
++ `--mode-dump-dir` -- specifies output directory for `dump` pass
++ `--complexity-threshold` -- specified the minimum total function complexity to be process by `instrument` pass
++ `--intrinsic-<io|memory|cpu>-<enter|exit>=<function_name>` -- sets corresponding intrinsic to specified value for `instrument` pass. 
+  For example, `--intrinsic-io-enter=io_enter` tells boundary to insert `io_enter()` call in the beginning of every function classified as IO.
+  Target function should follow C call convention, have signature `void <function_name>()` and be thread-safe (unless the program to instrument is not single-thread itself)
+
 Testing
 =======
 
